@@ -52,7 +52,7 @@ public class DatePickerPlugin extends CordovaPlugin {
 
 	@Override
 	public boolean execute(final String action, final JSONArray data, final CallbackContext callbackContext) {
-		Log.d(pluginName, "DatePicker called with options: " + data);
+		Log.d(pluginName, "DatePicker called with options1: " + data);
 		called = false;
 		canceled = false;
 		boolean result = false;
@@ -69,9 +69,32 @@ public class DatePickerPlugin extends CordovaPlugin {
 		Runnable runnable;
 		JsonDate jsonDate = new JsonDate().fromJson(data);
 		    
-    // Retrieve Android theme
+    // Retrieve Android theme - use safe standard themes to avoid crashes
     JSONObject options = data.optJSONObject(0);
-    int theme = options.optInt("androidTheme", 1);
+    int theme = options.optInt("androidTheme", android.app.AlertDialog.THEME_HOLO_LIGHT);
+    
+    // Ensure we use a safe standard theme to prevent TimePicker crashes on newer Android versions
+    switch (theme) {
+        case 1:
+            theme = android.app.AlertDialog.THEME_TRADITIONAL;
+            break;
+        case 2:
+            theme = android.app.AlertDialog.THEME_HOLO_DARK;
+            break;
+        case 3:
+            theme = android.app.AlertDialog.THEME_HOLO_LIGHT;
+            break;
+        case 4:
+            theme = android.app.AlertDialog.THEME_DEVICE_DEFAULT_DARK;
+            break;
+        case 5:
+            theme = android.app.AlertDialog.THEME_DEVICE_DEFAULT_LIGHT;
+            break;
+        default:
+            // For any other value, use a safe default
+            theme = android.app.AlertDialog.THEME_HOLO_LIGHT;
+            break;
+    }
 
 		if (ACTION_TIME.equalsIgnoreCase(jsonDate.action)) {
 			runnable = runnableTimeDialog(datePickerPlugin, theme, currentCtx,
@@ -97,6 +120,7 @@ public class DatePickerPlugin extends CordovaPlugin {
 				final TimeSetListener timeSetListener = new TimeSetListener(datePickerPlugin, callbackContext, calendarDate);
 				final TimePickerDialog timeDialog = new TimePickerDialog(currentCtx, theme, timeSetListener, jsonDate.hour,
 						jsonDate.minutes, jsonDate.is24Hour) {
+					@Override
 					public void onTimeChanged(TimePicker view, int hourOfDay, int minute) {
 						timePicker = view;
 						timePickerHour = hourOfDay;
