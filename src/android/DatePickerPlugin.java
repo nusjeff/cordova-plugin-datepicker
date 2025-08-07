@@ -52,7 +52,7 @@ public class DatePickerPlugin extends CordovaPlugin {
 
 	@Override
 	public boolean execute(final String action, final JSONArray data, final CallbackContext callbackContext) {
-		Log.d(pluginName, "DatePicker called with options: " + data);
+		Log.d(pluginName, "DatePicker called with options121212: " + data);
 		called = false;
 		canceled = false;
 		boolean result = false;
