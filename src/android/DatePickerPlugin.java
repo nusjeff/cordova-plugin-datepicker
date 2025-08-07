@@ -92,6 +92,7 @@ public class DatePickerPlugin extends CordovaPlugin {
 	private TimePicker timePicker;
 	private int timePickerHour = 0;
 	private int timePickerMinute = 0;
+	private boolean timePickerReady = false;
 	
 	private Runnable runnableTimeDialog(final DatePickerPlugin datePickerPlugin,
 			final int theme, final Context currentCtx, final CallbackContext callbackContext,
@@ -99,14 +100,21 @@ public class DatePickerPlugin extends CordovaPlugin {
 		return new Runnable() {
 			@Override
 			public void run() {
+				timePickerReady = false; // Reset flag for this dialog
 				final TimeSetListener timeSetListener = new TimeSetListener(datePickerPlugin, callbackContext, calendarDate);
-				final TimePickerDialog timeDialog = new TimePickerDialog(currentCtx, theme, timeSetListener, jsonDate.hour,
-						jsonDate.minutes, jsonDate.is24Hour) {
+				
+				// Validate time values to prevent invalid TimePicker state
+				int safeHour = Math.max(0, Math.min(23, jsonDate.hour));
+				int safeMinute = Math.max(0, Math.min(59, jsonDate.minutes));
+				
+				final TimePickerDialog timeDialog = new TimePickerDialog(currentCtx, theme, timeSetListener, safeHour,
+						safeMinute, jsonDate.is24Hour) {
 					public void onTimeChanged(TimePicker view, int hourOfDay, int minute) {
 						try {
 							timePicker = view;
 							timePickerHour = hourOfDay;
 							timePickerMinute = minute;
+							timePickerReady = true; // Mark as ready when onTimeChanged is called
 						} catch (Exception e) {
 							Log.e(pluginName, "Error in onTimeChanged: " + e.getMessage(), e);
 						}
@@ -161,7 +169,47 @@ public class DatePickerPlugin extends CordovaPlugin {
 					timeDialog.show();
 					// Remove random updateTime call that can cause NullPointerException
 					// timeDialog.updateTime(new Random().nextInt(23), new Random().nextInt(59));
-					timeDialog.updateTime(jsonDate.hour, jsonDate.minutes);
+					
+					// Only call updateTime if the values are different from constructor values
+					// This prevents unnecessary calls that can trigger the NullPointerException
+					if (safeHour != jsonDate.hour || safeMinute != jsonDate.minutes) {
+						// Add delay to prevent race condition with TimePicker initialization
+						new android.os.Handler().postDelayed(new Runnable() {
+							@Override
+							public void run() {
+								try {
+									// Additional safety check before calling updateTime
+									if (timeDialog != null && timeDialog.isShowing()) {
+										// Extra safety: Try to access TimePicker's internal state safely
+										boolean canUpdate = timePickerReady; // Use our flag first
+										
+										if (!canUpdate) {
+											try {
+												java.lang.reflect.Method getTimePickerMethod = timeDialog.getClass().getMethod("getTimePicker");
+												TimePicker tp = (TimePicker) getTimePickerMethod.invoke(timeDialog);
+												canUpdate = (tp != null);
+											} catch (Exception reflectionError) {
+												// If reflection fails, still try the normal way but log it
+												Log.w(pluginName, "Could not verify TimePicker state via reflection: " + reflectionError.getMessage());
+												canUpdate = true; // Fallback to trying
+											}
+										}
+										
+										if (canUpdate) {
+											timeDialog.updateTime(safeHour, safeMinute);
+											Log.d(pluginName, "Successfully updated time to " + safeHour + ":" + safeMinute);
+										} else {
+											Log.w(pluginName, "TimePicker not ready, skipping updateTime");
+										}
+									}
+								} catch (Exception e) {
+									Log.e(pluginName, "Error in delayed updateTime: " + e.getMessage(), e);
+									// Don't call callbackContext.error here as it might have already been called
+								}
+							}
+						}, 150); // Increased delay to 150ms for better safety
+					}
+					
 				} catch (Exception e) {
 					Log.e(pluginName, "Error showing TimePickerDialog: " + e.getMessage(), e);
 					callbackContext.error("Failed to show time picker: " + e.getMessage());
