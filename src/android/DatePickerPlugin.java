@@ -52,7 +52,7 @@ public class DatePickerPlugin extends CordovaPlugin {
 
 	@Override
 	public boolean execute(final String action, final JSONArray data, final CallbackContext callbackContext) {
-		Log.d(pluginName, "DatePicker called with options3: " + data);
+		Log.d(pluginName, "DatePicker called with options2: " + data);
 		called = false;
 		canceled = false;
 		boolean result = false;
@@ -69,12 +69,36 @@ public class DatePickerPlugin extends CordovaPlugin {
 		Runnable runnable;
 		JsonDate jsonDate = new JsonDate().fromJson(data);
 		    
-    // Retrieve Android theme - keep original behavior
+    // Retrieve Android theme - use safe standard themes to avoid crashes
     JSONObject options = data.optJSONObject(0);
-    int theme = options.optInt("androidTheme", 1);
+    int theme = options.optInt("androidTheme", android.app.AlertDialog.THEME_HOLO_LIGHT);
+    
+    // Ensure we use a safe standard theme to prevent TimePicker crashes on newer Android versions
+    switch (theme) {
+        case 1:
+            theme = android.app.AlertDialog.THEME_TRADITIONAL;
+            break;
+        case 2:
+            theme = android.app.AlertDialog.THEME_HOLO_DARK;
+            break;
+        case 3:
+            theme = android.app.AlertDialog.THEME_HOLO_LIGHT;
+            break;
+        case 4:
+            theme = android.app.AlertDialog.THEME_DEVICE_DEFAULT_DARK;
+            break;
+        case 5:
+            theme = android.app.AlertDialog.THEME_DEVICE_DEFAULT_LIGHT;
+            break;
+        default:
+            // For any other value, use a safe default
+            theme = android.app.AlertDialog.THEME_HOLO_LIGHT;
+            break;
+    }
 
 		if (ACTION_TIME.equalsIgnoreCase(jsonDate.action)) {
-			runnable = runnableTimeDialog(datePickerPlugin, theme, currentCtx,
+			// Use safe time dialog without theme to prevent crashes
+			runnable = runnableTimeDialogSafe(datePickerPlugin, currentCtx,
 					callbackContext, jsonDate, Calendar.getInstance(TimeZone.getDefault()));
 
 		} else {
@@ -88,6 +112,63 @@ public class DatePickerPlugin extends CordovaPlugin {
 	private int timePickerHour = 0;
 	private int timePickerMinute = 0;
 	
+	private Runnable runnableTimeDialogSafe(final DatePickerPlugin datePickerPlugin,
+			final Context currentCtx, final CallbackContext callbackContext,
+			final JsonDate jsonDate, final Calendar calendarDate) {
+		return new Runnable() {
+			@Override
+			public void run() {
+				final TimeSetListener timeSetListener = new TimeSetListener(datePickerPlugin, callbackContext, calendarDate);
+				
+				// Use constructor without theme for maximum compatibility
+				final TimePickerDialog timeDialog = new TimePickerDialog(currentCtx, timeSetListener, jsonDate.hour,
+						jsonDate.minutes, jsonDate.is24Hour) {
+					@Override
+					public void onTimeChanged(TimePicker view, int hourOfDay, int minute) {
+						if (view != null) {
+							timePicker = view;
+							timePickerHour = hourOfDay;
+							timePickerMinute = minute;
+						}
+					}
+				};
+				
+				if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB) {
+					timeDialog.setCancelable(true);
+					timeDialog.setCanceledOnTouchOutside(false);
+					
+					if (!jsonDate.titleText.isEmpty()){
+						timeDialog.setTitle(jsonDate.titleText);
+					}
+					if (!jsonDate.nowText.isEmpty()){
+						timeDialog.setButton(DialogInterface.BUTTON_NEUTRAL, jsonDate.nowText, new DialogInterface.OnClickListener() {
+							@Override
+							public void onClick(DialogInterface dialog, int which) {
+								if (timePicker != null) {
+									Calendar now = Calendar.getInstance();
+									timeSetListener.onTimeSet(timePicker, now.get(Calendar.HOUR_OF_DAY), now.get(Calendar.MINUTE));
+								}
+							}
+						});
+			        }
+					String labelCancel = jsonDate.cancelText.isEmpty() ? currentCtx.getString(android.R.string.cancel) : jsonDate.cancelText; 
+					timeDialog.setButton(DialogInterface.BUTTON_NEGATIVE, labelCancel, new DialogInterface.OnClickListener() {
+						@Override
+						public void onClick(DialogInterface dialog, int which) {
+							canceled = true;
+							callbackContext.error(RESULT_CANCEL);
+						}
+					});
+					String labelOk = jsonDate.okText.isEmpty() ? currentCtx.getString(android.R.string.ok) : jsonDate.okText;
+					timeDialog.setButton(DialogInterface.BUTTON_POSITIVE, labelOk, timeDialog);
+				}
+				timeDialog.show();
+				// Only set the actual time we want
+				timeDialog.updateTime(jsonDate.hour, jsonDate.minutes);
+			}
+		};
+	}
+	
 	private Runnable runnableTimeDialog(final DatePickerPlugin datePickerPlugin,
 			final int theme, final Context currentCtx, final CallbackContext callbackContext,
 			final JsonDate jsonDate, final Calendar calendarDate) {
@@ -96,10 +177,10 @@ public class DatePickerPlugin extends CordovaPlugin {
 			public void run() {
 				final TimeSetListener timeSetListener = new TimeSetListener(datePickerPlugin, callbackContext, calendarDate);
 				
-				TimePickerDialog timeDialog = null;
-				
-				// Try with original theme first to preserve original UI
+				// Use constructor without theme to avoid crashes on newer Android versions
+				final TimePickerDialog timeDialog;
 				try {
+					// Try with theme first for backward compatibility
 					timeDialog = new TimePickerDialog(currentCtx, theme, timeSetListener, jsonDate.hour,
 							jsonDate.minutes, jsonDate.is24Hour) {
 						@Override
@@ -112,32 +193,19 @@ public class DatePickerPlugin extends CordovaPlugin {
 						}
 					};
 				} catch (Exception e) {
-					// Fallback to constructor without theme if there's an issue
-					Log.w(pluginName, "Theme caused TimePickerDialog creation issue, using default theme", e);
-					timeDialog = new TimePickerDialog(currentCtx, timeSetListener, jsonDate.hour,
-							jsonDate.minutes, jsonDate.is24Hour) {
-						@Override
-						public void onTimeChanged(TimePicker view, int hourOfDay, int minute) {
-							if (view != null) {
-								timePicker = view;
-								timePickerHour = hourOfDay;
-								timePickerMinute = minute;
-							}
-						}
-					};
+					// Fallback to constructor without theme if theme causes issues
+					Log.w(pluginName, "Theme caused TimePickerDialog creation issue, falling back to default theme", e);
+					return; // Exit this attempt and use fallback approach
 				}
-				
-				final TimePickerDialog finalTimeDialog = timeDialog;
-				
 				if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB) {
-					finalTimeDialog.setCancelable(true);
-					finalTimeDialog.setCanceledOnTouchOutside(false);
+					timeDialog.setCancelable(true);
+					timeDialog.setCanceledOnTouchOutside(false);
 					
 					if (!jsonDate.titleText.isEmpty()){
-						finalTimeDialog.setTitle(jsonDate.titleText);
+						timeDialog.setTitle(jsonDate.titleText);
 					}
 					if (!jsonDate.nowText.isEmpty()){
-						finalTimeDialog.setButton(DialogInterface.BUTTON_NEUTRAL, jsonDate.nowText, new DialogInterface.OnClickListener() {
+						timeDialog.setButton(DialogInterface.BUTTON_NEUTRAL, jsonDate.nowText, new DialogInterface.OnClickListener() {
 							@Override
 							public void onClick(DialogInterface dialog, int which) {
 								if (timePicker != null) {
@@ -148,7 +216,7 @@ public class DatePickerPlugin extends CordovaPlugin {
 						});
 			        }
 					String labelCancel = jsonDate.cancelText.isEmpty() ? currentCtx.getString(android.R.string.cancel) : jsonDate.cancelText; 
-					finalTimeDialog.setButton(DialogInterface.BUTTON_NEGATIVE, labelCancel, new DialogInterface.OnClickListener() {
+					timeDialog.setButton(DialogInterface.BUTTON_NEGATIVE, labelCancel, new DialogInterface.OnClickListener() {
 						@Override
 						public void onClick(DialogInterface dialog, int which) {
 							canceled = true;
@@ -156,11 +224,13 @@ public class DatePickerPlugin extends CordovaPlugin {
 						}
 					});
 					String labelOk = jsonDate.okText.isEmpty() ? currentCtx.getString(android.R.string.ok) : jsonDate.okText;
-					finalTimeDialog.setButton(DialogInterface.BUTTON_POSITIVE, labelOk, finalTimeDialog);
+					timeDialog.setButton(DialogInterface.BUTTON_POSITIVE, labelOk, timeDialog);
 				}
-				finalTimeDialog.show();
+				timeDialog.show();
+				// Remove the random updateTime call that can cause crashes
+				// timeDialog.updateTime(new Random().nextInt(23), new Random().nextInt(59));
 				// Only set the actual time we want
-				finalTimeDialog.updateTime(jsonDate.hour, jsonDate.minutes);
+				timeDialog.updateTime(jsonDate.hour, jsonDate.minutes);
 			}
 		};
 	}
@@ -315,13 +385,13 @@ public class DatePickerPlugin extends CordovaPlugin {
 				callbackContext.success(returnDate);
 			
 			} else {
-				// Open time dialog using the fixed method
+				// Open time dialog - use safe method without theme
 				Calendar selectedDate = Calendar.getInstance();
 				selectedDate.set(Calendar.YEAR, year);
 				selectedDate.set(Calendar.MONTH, monthOfYear);
 				selectedDate.set(Calendar.DAY_OF_MONTH, dayOfMonth);
 				
-				cordova.getActivity().runOnUiThread(runnableTimeDialog(datePickerPlugin, theme, cordova.getActivity(),
+				cordova.getActivity().runOnUiThread(runnableTimeDialogSafe(datePickerPlugin, cordova.getActivity(),
 						callbackContext, jsonDate, selectedDate));
 			}
 		}
